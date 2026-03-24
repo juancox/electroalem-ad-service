@@ -171,11 +171,6 @@ def endpoint_procesar():
 
 
 if __name__ == '__main__':
-    # Test local con los archivos de ejemplo
-    import sys
-    if len(sys.argv) > 1:
-        with open(sys.argv[1], 'rb') as fh:
-            data = procesar_ad(fh.read(), sys.argv[1].split('/')[-1])
-        print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
-    else:
-        app.run(host='0.0.0.0', port=5679, debug=True)
+    import os
+    port = int(os.environ.get('PORT', 5679))
+    app.run(host='0.0.0.0', port=port)
