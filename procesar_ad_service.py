@@ -2,8 +2,8 @@
 ElectroAlem - Microservicio de procesamiento de archivos AD
 Extrae métricas estandarizadas del XLSX para el flujo n8n.
 
-Deploy: Flask simple en el mismo servidor de n8n
-Uso: POST /procesar-ad con multipart/form-data (file + filename)
+Deploy: gunicorn en Railway
+Uso: POST /procesar-ad con multipart/form-data (file + filename + historial opcional)
 """
 
 from flask import Flask, request, jsonify
@@ -17,8 +17,12 @@ app = Flask(__name__)
 
 
 def extraer_fecha_desde_nombre(filename: str) -> str:
-    """Extrae fecha del nombre AD_DD_MM_YYYY.xlsx → YYYY-MM-DD"""
-    match = re.search(r'AD_(\d{2})_(\d{2})_(\d{4})', filename)
+    """
+    Extrae fecha del nombre del archivo.
+    Soporta: AD_DD_MM_YYYY.xlsx y AD DD_MM_YYYY.xlsx (con espacio)
+    """
+    normalizado = filename.replace(' ', '_')
+    match = re.search(r'AD_(\d{2})_(\d{2})_(\d{4})', normalizado)
     if match:
         d, m, y = match.groups()
         return f"{y}-{m}-{d}"
@@ -38,7 +42,7 @@ def procesar_ad(file_bytes: bytes, filename: str) -> dict:
 
     tdf['Código'] = tdf['Código'].astype(str)
 
-    # Excluir fila de totales (contiene "Total general" como código)
+    # Excluir fila de totales
     tdf = tdf[~tdf['Código'].str.contains('Total', na=False)]
 
     morosos = tdf[tdf['Total general'] > 0]
@@ -109,37 +113,39 @@ def procesar_ad(file_bytes: bytes, filename: str) -> dict:
     }
 
 
-def calcular_reincidentes(codigos_semana_actual: list, historial_rows: list) -> dict:
+def calcular_reincidentes(codigos_actuales: list, historial_rows: list) -> dict:
     """
-    Calcula clientes que se repiten y los que pagaron.
-    historial_rows: últimas 4 filas del Google Sheet historial
+    Calcula reincidentes y clientes que pagaron comparando con el historial.
+    - Reincidentes: morosos en el AD actual que TAMBIÉN estaban en TODAS las semanas anteriores
+    - Pagaron: estaban en la semana más antigua del historial y YA NO están en el actual
     """
-    if len(historial_rows) < 3:
+    if not historial_rows:
         return {"reincidentes_count": 0, "pagaron_count": 0}
 
-    # Reconstruir sets de morosos por semana desde historial
-    # Nota: en el sheet guardamos codigos_morosos como JSON string
+    set_actual = set(str(c) for c in codigos_actuales)
+
+    # Reconstruir sets históricos desde el campo codigos_morosos del sheet
     sets_historicos = []
-    for row in historial_rows[-4:-1]:  # las 3 semanas anteriores
+    for row in historial_rows:
         codigos_str = row.get('codigos_morosos', '[]')
         try:
-            sets_historicos.append(set(json.loads(codigos_str)))
+            parsed = json.loads(codigos_str) if isinstance(codigos_str, str) else codigos_str
+            if isinstance(parsed, list) and len(parsed) > 0:
+                sets_historicos.append(set(str(c) for c in parsed))
         except Exception:
-            sets_historicos.append(set())
+            pass
 
-    set_actual = set(str(c) for c in codigos_semana_actual)
+    if not sets_historicos:
+        return {"reincidentes_count": 0, "pagaron_count": 0}
 
-    if sets_historicos:
-        # Reincidentes: en el set actual Y en TODAS las semanas anteriores disponibles
-        reincidentes = set_actual.copy()
-        for s in sets_historicos:
-            reincidentes &= s
+    # Reincidentes: presentes en el actual Y en TODAS las semanas históricas
+    reincidentes = set_actual.copy()
+    for s in sets_historicos:
+        reincidentes &= s
 
-        # Los que pagaron: estaban en la primera semana registrada y NO están ahora
-        primer_set = sets_historicos[0] if sets_historicos else set()
-        pagaron = primer_set - set_actual
-    else:
-        reincidentes, pagaron = set(), set()
+    # Pagaron: estaban en la semana más antigua y no están en el actual
+    set_mas_antiguo = sets_historicos[0]
+    pagaron = set_mas_antiguo - set_actual
 
     return {
         "reincidentes_count": len(reincidentes),
@@ -159,15 +165,19 @@ def endpoint_procesar():
     try:
         resultado = procesar_ad(file_bytes, filename)
 
-        # Calcular reincidentes si vienen datos del historial
+        # Calcular reincidentes con historial si viene en el request
         historial_json = request.form.get('historial', '[]')
-        historial = json.loads(historial_json)
+        try:
+            historial = json.loads(historial_json)
+        except Exception:
+            historial = []
+
         reincidentes = calcular_reincidentes(resultado['codigos_morosos'], historial)
         resultado.update(reincidentes)
 
         return jsonify(resultado)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "filename": filename}), 500
 
 
 if __name__ == '__main__':
