@@ -1,1 +1,1 @@
-web: python procesar_ad_service.py
+web: gunicorn procesar_ad_service:app
