@@ -351,6 +351,10 @@ def _transformar(sistema_bytes, anterior_bytes=None, fecha_ref=None):
     tramos = [">61", "46-60", "31-45", "16-30", "1-15"]
     # Pivot usa Saldo Documento (saldo individual por factura, no acumulativo)
     # Solo filas con saldo distinto de cero y tramo calculado (documentos vencidos)
+    # Rellenar None en columnas del index para que pandas no descarte las filas
+    for col in ["C.Co.","Ej.Cta","P","Límite","Clasificación","Categ."]:
+        if col in df.columns:
+            df[col] = df[col].fillna("") if df[col].dtype == object else df[col].fillna(0)
     df_pivot_src = df[(df["Saldo Documento"] != 0) & df["Tramo"].notna()].copy()
     pivot = df_pivot_src.pivot_table(
         index=["Código","Razón Social","C.Co.","Ej.Cta","P","Límite","Clasificación","Categ."],
