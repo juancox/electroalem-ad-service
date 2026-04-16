@@ -451,8 +451,12 @@ def _transformar(sistema_bytes, anterior_bytes=None, fecha_ref=None):
     _auto_width(ws)
 
     # Hojas de cobranzas
+    # Excel no permite / en nombres de hoja → reemplazar con -
+    def _safe_sheet_name(label):
+        return label.replace("/", "-")[:31]
+
     for df_cob, label in [(df_cob_ant, labels["anterior"]), (df_cob_act, labels["actual"])]:
-        ws = wb.create_sheet(label[:31])
+        ws = wb.create_sheet(_safe_sheet_name(label))
         ws["A1"] = "Listado de Movimientos de Ventas"
         if not df_cob.empty:
             _write_df(ws, df_cob, start_row=3)
