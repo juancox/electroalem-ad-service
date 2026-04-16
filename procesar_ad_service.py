@@ -258,7 +258,13 @@ def _semana_labels(fecha_ref):
 
 def _transformar(sistema_bytes, anterior_bytes=None, fecha_ref=None):
     if fecha_ref is None:
-        fecha_ref = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+        # La fecha de referencia es el lunes de la semana siguiente al archivo.
+        # Esto replica la lógica manual: los días se calculan desde el próximo lunes.
+        hoy = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+        dias_hasta_lunes = (7 - hoy.weekday()) % 7
+        if dias_hasta_lunes == 0:
+            dias_hasta_lunes = 7
+        fecha_ref = hoy + timedelta(days=dias_hasta_lunes)
 
     # 1. Leer archivo del sistema
     df = pd.read_excel(io.BytesIO(sistema_bytes), sheet_name=0, header=1)
@@ -340,10 +346,15 @@ def _transformar(sistema_bytes, anterior_bytes=None, fecha_ref=None):
     df_base_deuda = df[[c for c in cols_bd if c in df.columns]].copy()
 
     # 8. Tabla dinámica por cliente y tramo
+    # Incluir todos los documentos con saldo distinto de cero.
+    # Los no vencidos (días <= 0) se agrupan en "1-15" para que aparezcan en la tabla.
     tramos = [">61", "46-60", "31-45", "16-30", "1-15"]
-    pivot = df[df["Tramo"].notna()].pivot_table(
+    # Pivot usa Saldo Documento (saldo individual por factura, no acumulativo)
+    # Solo filas con saldo distinto de cero y tramo calculado (documentos vencidos)
+    df_pivot_src = df[(df["Saldo Documento"] != 0) & df["Tramo"].notna()].copy()
+    pivot = df_pivot_src.pivot_table(
         index=["Código","Razón Social","C.Co.","Ej.Cta","P","Límite","Clasificación","Categ."],
-        columns="Tramo", values="Saldo Total", aggfunc="sum"
+        columns="Tramo", values="Saldo Documento", aggfunc="sum"
     ).reset_index()
     for t in tramos:
         if t not in pivot.columns:
